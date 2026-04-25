@@ -1,14 +1,17 @@
 # EC2 Auto Sync + Remote Log Watcher
 
-This script watches a local backend folder and automatically uploads changes to a remote **Windows EC2 instance**, including:
+This script watches a local folder and automatically uploads changes to a remote **Windows or Linux EC2 instance**, including:
 
 - ✅ Real-time file and folder sync
 - ✅ Upload on file change / new folders
 - ✅ Remote deletions on local delete
 - ✅ Automatic `npm install` when `package.json` is updated
+- ✅ Automatic `npm start` on the remote machine
 - ✅ SSH tunnel for phpMyAdmin on `localhost:8888`
-- ✅ Live `server.log` tracking in a local CMD window
-<!-- - ❗ Manual `npm start >> server.log` must be started on EC2 -->
+- ✅ Live `server.log` tracking in a local CMD window (auto-reconnects on disconnect)
+- ✅ Auto-detects remote OS (Windows or Linux) — no manual config needed
+- ✅ SSH reconnects automatically if the connection drops
+- ✅ Validates `.env` at startup with clear error messages
 
 ## 🔑 About the PEM File
 
@@ -42,6 +45,168 @@ macOS / Linux:
 chmod 400 your-key.pem
 ```
 
+## 🖥️ Configuring the EC2 Instance
+
+> This script runs on your **local machine** and connects to a remote EC2 instance. The steps below cover both Windows and Linux EC2 setups.
+
+### 1. AWS Security Group (Firewall)
+
+In the AWS EC2 console, go to your instance → **Security** tab → click the security group → **Edit inbound rules** and add:
+
+| Type | Protocol | Port | Source | Purpose |
+|------|----------|------|--------|---------|
+| SSH | TCP | 22 | Your IP | SSH connection + file sync |
+| Custom TCP | TCP | 80 | Your IP | phpMyAdmin via SSH tunnel |
+| RDP | TCP | 3389 | Your IP | Remote Desktop — Windows only, optional |
+
+> Use **My IP** in the Source dropdown to automatically fill in your current IP. If your IP changes, you'll need to update the rule.
+
+---
+
+### Windows EC2
+
+#### 2a. Enable OpenSSH Server
+
+By default, Windows Server EC2 instances don't have SSH enabled. RDP into the instance and run this in PowerShell as Administrator:
+
+```powershell
+# Install OpenSSH Server
+Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0
+
+# Start the service
+Start-Service sshd
+
+# Set it to start automatically on boot
+Set-Service -Name sshd -StartupType Automatic
+```
+
+Verify it's running:
+
+```powershell
+Get-Service sshd
+```
+
+#### 2b. Allow SSH Through Windows Firewall
+
+If the OpenSSH installer didn't add a firewall rule automatically, add one manually:
+
+```powershell
+New-NetFirewallRule -Name "OpenSSH-Server-In-TCP" -DisplayName "OpenSSH Server (sshd)" -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22
+```
+
+#### 2c. Set Up the Administrator SSH Key
+
+To allow key-based login (required by this script), add your public key to the Administrator's authorized keys file. On the EC2 instance run:
+
+```powershell
+# Create the folder if it doesn't exist
+New-Item -ItemType Directory -Force -Path "C:\ProgramData\ssh"
+
+# Add your public key (paste the contents of your .pub key file)
+Add-Content -Path "C:\ProgramData\ssh\administrators_authorized_keys" -Value "YOUR_PUBLIC_KEY_HERE"
+
+# Fix permissions on the file (required)
+icacls "C:\ProgramData\ssh\administrators_authorized_keys" /inheritance:r /grant "SYSTEM:(F)" /grant "BUILTIN\Administrators:(F)"
+```
+
+> For the Administrator account, Windows looks for the key in `C:\ProgramData\ssh\administrators_authorized_keys`, not in the user's home folder.
+
+---
+
+### Linux EC2
+
+#### 2a. SSH is already enabled
+
+SSH server (`sshd`) runs by default on all Linux EC2 AMIs. No extra setup needed.
+
+#### 2b. Set Up the SSH Key
+
+AWS automatically adds your key pair to `~/.ssh/authorized_keys` when the instance is launched. No manual setup needed if you selected the key pair at launch time.
+
+If you need to add a key manually, SSH into the instance and run:
+
+```bash
+mkdir -p ~/.ssh
+echo "YOUR_PUBLIC_KEY_HERE" >> ~/.ssh/authorized_keys
+chmod 700 ~/.ssh
+chmod 600 ~/.ssh/authorized_keys
+```
+
+#### 2c. Install Node.js
+
+```bash
+# Using nvm (recommended)
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
+source ~/.bashrc
+nvm install --lts
+
+# Or via package manager (Debian/Ubuntu)
+sudo apt install nodejs npm
+
+# Or via package manager (Amazon Linux / Fedora)
+sudo dnf install nodejs
+```
+
+---
+
+### 3. Verify the Connection
+
+From your local machine, test the SSH connection before running the script:
+
+```bash
+# Windows EC2
+ssh -i your-key.pem Administrator@your-ec2-ip
+
+# Linux EC2 (username varies by AMI)
+ssh -i your-key.pem ec2-user@your-ec2-ip   # Amazon Linux
+ssh -i your-key.pem ubuntu@your-ec2-ip     # Ubuntu
+```
+
+## 💻 Local Machine Prerequisites
+
+### Windows
+
+- OpenSSH client is included in Windows 10/11. Verify it's available by running `ssh -V` in PowerShell.
+- If missing: **Settings** → **Optional Features** → **Add a feature** → search for **OpenSSH Client** → Install.
+- Install Node.js from [nodejs.org](https://nodejs.org).
+
+### macOS
+
+- OpenSSH is pre-installed. Verify with `ssh -V` in Terminal.
+- Install Node.js via Homebrew:
+
+```bash
+brew install node
+```
+
+Or download from [nodejs.org](https://nodejs.org).
+
+### Linux
+
+- OpenSSH client is usually pre-installed. If not:
+
+```bash
+# Debian/Ubuntu
+sudo apt install openssh-client
+
+# Fedora/RHEL
+sudo dnf install openssh-clients
+```
+
+- Install Node.js:
+
+```bash
+# Debian/Ubuntu
+sudo apt install nodejs npm
+
+# Fedora/RHEL
+sudo dnf install nodejs
+
+# Or use nvm for version management (recommended)
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
+nvm install --lts
+```
+
 ## 🔧 Setup
 
 1. **Install dependencies**
@@ -55,11 +220,19 @@ npm install chokidar node-ssh minimatch dotenv
 Use `.env.example` as a base:
 
 ```ini
+# Windows EC2
 WATCHED=./backend
 EC2_HOST=x.x.x.x
 EC2_USER=Administrator
 EC2_PEM_PATH=./secretKey.pem
 REMOTE_BASE_PATH=C:\Users\Administrator\Desktop\backend
+
+# Linux EC2
+WATCHED=./backend
+EC2_HOST=x.x.x.x
+EC2_USER=ec2-user
+EC2_PEM_PATH=./secretKey.pem
+REMOTE_BASE_PATH=/home/ec2-user/backend
 ```
 
 ## 🚀 Run the Sync Script
@@ -70,32 +243,12 @@ node index.js
 
 This will:
 
-- 🔐 Connect to EC2
+- 🔐 Connect to EC2 and auto-detect the remote OS
 - ⬆️ Upload all files/folders from `WATCHED`
+- 🚀 Start `npm start` on the remote machine automatically
 - 👀 Start watching for changes
 - 🔌 Open an SSH tunnel for phpMyAdmin on `localhost:8888`
 - 📺 Open a local CMD window that tails `server.log` from the EC2 instance
-
-## 🧠 Important Manual Step
-
-On the **EC2 instance**, run this command **once manually**:
-
-```cmd
-npm start >> server.log
-```
-
-This ensures the backend:
-
-- Runs in the background
-- Logs output to `server.log` (which your local machine will follow)
-
-💡 You can also RDP into the EC2, open CMD in the backend folder, and run:
-
-```cmd
-start cmd /k "npm start >> server.log"
-```
-
-This keeps a live visible window.
 
 ## ⚙️ Features
 
@@ -108,6 +261,8 @@ This keeps a live visible window.
 - Deletes remote files/folders when removed locally
 - Creates new folders as needed
 - Opens `http://localhost:8888/phpmyadmin` via tunnel
+- SSH reconnects automatically if the connection drops mid-session
+- Log watcher CMD window reconnects automatically if SSH drops
 
 ## 🔒 Security Reminder
 
@@ -124,19 +279,21 @@ The SSH tunnel is wide open (`-L 8888:localhost:80`). Consider:
 - EC2 instance with:
   - `node` and `npm` installed
   - OpenSSH server enabled
-  - `npm start` configured in backend
+  - `npm start` configured in `package.json`
 
 ## 📂 File Structure
 
 ```
 .
-├── index.js                 # Main watcher + sync script
-├── .env.example             # Example config
-├── launch-npm.cmd (optional) # Manual starter script for EC2
+├── index.js        # Main watcher + sync script
+├── .env            # Your config (gitignored)
+├── .env.example    # Config template
+└── your-key.pem    # EC2 private key (gitignored)
 ```
 
 ## 🧹 Troubleshooting
 
-- If `server.log` does not exist, `watchRemoteLogs()` will fail.
-- Make sure `npm start` is launched and logging to `server.log`.
-- If CMD does not start visibly on EC2 via script, use `Task Scheduler` or run manually.
+- If `server.log` does not exist yet, the log watcher will error on connect — it will retry automatically once the file is created by `npm start`.
+- If the script exits with `❌ Missing required .env variables`, check your `.env` file has all five variables set: `WATCHED`, `EC2_HOST`, `EC2_USER`, `EC2_PEM_PATH`, `REMOTE_BASE_PATH`.
+- If SSH connection is refused, verify port 22 is open in the EC2 security group and the SSH service is running on the instance.
+- On Linux EC2, if a second `npm start` process launches unexpectedly, the script automatically kills any existing `npm start` process before starting a new one.
