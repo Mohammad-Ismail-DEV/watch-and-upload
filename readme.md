@@ -26,6 +26,22 @@ The `.pem` file is your EC2 private key — it authenticates your SSH connection
 
 When launching your EC2 instance, select this key pair. Then set `EC2_PEM_PATH` in your `.env` to point to the downloaded file.
 
+**Extracting the public key from your `.pem`:**
+
+You'll need the public key when setting up SSH access on the EC2 instance. Extract it with:
+
+```bash
+ssh-keygen -y -f your-key.pem
+```
+
+This prints the public key to the terminal — copy the output and paste it into `authorized_keys` on the remote machine.
+
+To save it to a file instead:
+
+```bash
+ssh-keygen -y -f your-key.pem > your-key.pub
+```
+
 > If you already have a running EC2 instance and lost the key, you'll need to replace it via the AWS console or by stopping the instance and attaching the volume to another instance.
 
 **Fixing permissions (required):**
