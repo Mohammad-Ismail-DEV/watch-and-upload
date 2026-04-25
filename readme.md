@@ -8,7 +8,39 @@ This script watches a local backend folder and automatically uploads changes to 
 - ✅ Automatic `npm install` when `package.json` is updated
 - ✅ SSH tunnel for phpMyAdmin on `localhost:8888`
 - ✅ Live `server.log` tracking in a local CMD window
-- ❗ Manual `npm start >> server.log` must be started on EC2
+<!-- - ❗ Manual `npm start >> server.log` must be started on EC2 -->
+
+## 🔑 About the PEM File
+
+The `.pem` file is your EC2 private key — it authenticates your SSH connection without a password. AWS generates it when you create an EC2 instance.
+
+**To get it:**
+
+1. Go to the AWS EC2 console → **Network & Security** → **Key Pairs**
+2. Click **Create key pair**, give it a name, and select `.pem` format
+3. Click **Create** — the file will download automatically
+4. Store it somewhere safe (e.g. in this project folder). **AWS only lets you download it once.**
+
+When launching your EC2 instance, select this key pair. Then set `EC2_PEM_PATH` in your `.env` to point to the downloaded file.
+
+> If you already have a running EC2 instance and lost the key, you'll need to replace it via the AWS console or by stopping the instance and attaching the volume to another instance.
+
+**Fixing permissions (required):**
+
+SSH will refuse to use the `.pem` file if other users on your machine can read it. You'll get a `"UNPROTECTED PRIVATE KEY FILE"` error and the connection will be refused.
+
+Windows (PowerShell):
+
+```powershell
+icacls "your-key.pem" /inheritance:r
+icacls "your-key.pem" /grant:r "$($env:USERNAME):(R)"
+```
+
+macOS / Linux:
+
+```bash
+chmod 400 your-key.pem
+```
 
 ## 🔧 Setup
 
@@ -53,6 +85,7 @@ npm start >> server.log
 ```
 
 This ensures the backend:
+
 - Runs in the background
 - Logs output to `server.log` (which your local machine will follow)
 
