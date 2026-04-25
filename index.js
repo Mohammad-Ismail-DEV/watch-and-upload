@@ -138,6 +138,18 @@ function createSshTunnelWithRetry() {
   });
 }
 
+async function launchRemoteNpmCmd() {
+  console.log("🚀 Starting npm in remote visible CMD...");
+  const remoteDir = config.ec2.remoteBasePath;
+  const powershellCmd = `start cmd /k "cd /d '${remoteDir}' && npm start >> server.log 2>&1"`;
+  try {
+    await ssh.execCommand(`powershell -Command "${powershellCmd}"`);
+    console.log("✅ Remote npm started in CMD and logging to server.log");
+  } catch (err) {
+    console.error("❌ Failed to start remote CMD for npm:", err.message);
+  }
+}
+
 async function runRemoteNpmInstall() {
   console.log("📦 Detected package.json update, running npm install on EC2...");
   const remoteDir = config.ec2.remoteBasePath;
@@ -196,6 +208,7 @@ async function start() {
 
   createSshTunnelWithRetry();
   await initialUpload();
+  await launchRemoteNpmCmd();
   watchRemoteLogsWithRetry();
 
   chokidar
